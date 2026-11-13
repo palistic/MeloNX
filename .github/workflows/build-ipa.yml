@@ -16,7 +16,8 @@ concurrency:
 
 jobs:
   build-ipa:
-    runs-on: macos-26
+    # MeloNX 2.7 uses iOS 27 APIs (scene accessories); Xcode 26 cannot compile them.
+    runs-on: xcode-27
     timeout-minutes: 120
 
     env:
