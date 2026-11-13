@@ -1,60 +1,80 @@
-name: Build MeloNX IPA (unsigned)
+name: Build MeloNX 2.7 IPA (unsigned)
 
 on:
-  push:
-    branches: [ master, main ]
   workflow_dispatch:
 
-env:
-  DOTNET_CLI_TELEMETRY_OPTOUT: 1
-
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: melonx-ipa-build
+  cancel-in-progress: false
 
 jobs:
   build-ipa:
-    # The app's Release config targets the iOS 26.2 SDK, so we need the
-    # macOS 26 image (ships Xcode 26.x). macos-15 runners top out at Xcode 16.
+    # MeloNX's iOS project targets the iOS 26 SDK.
     runs-on: macos-26
-    timeout-minutes: 90
+    timeout-minutes: 120
+
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      NUGET_XMLDOC_MODE: skip
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout build workflow
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-dotnet@v4
+      - name: Fetch official MeloNX 2.7 source
+        shell: bash
+        run: |
+          git clone --depth 1 --branch 2.7 https://starforgejo.dev/projects/MeloNX.git upstream
+          test -f upstream/global.json
+          test -f upstream/distribution/ios/build.sh
+          test -f upstream/src/MeloNX/MeloNX.xcodeproj/project.pbxproj
+          echo "UPSTREAM_COMMIT=$(git -C upstream rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "Fetched official MeloNX source at $(git -C upstream rev-parse --short HEAD)"
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
         with:
-          global-json-file: global.json
+          global-json-file: upstream/global.json
 
       - name: Make dotnet visible to Xcode's build script
-        # The "Ryujinx" legacy target runs distribution/ios/build.sh from inside
-        # xcodebuild, which probes /usr/local/bin for dotnet.
         run: sudo ln -sf "$(command -v dotnet)" /usr/local/bin/dotnet
 
-      - name: Select latest Xcode
+      - name: Select latest installed Xcode
+        shell: bash
         run: |
-          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)/Contents/Developer"
+          XCODE_PATH="$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)/Contents/Developer"
+          sudo xcode-select -s "$XCODE_PATH"
           xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
-      - name: 'Cache: ~/.nuget/packages'
+      - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/global.json', '**/*.csproj', '**/Directory.Packages.props') }}
+          key: ${{ runner.os }}-nuget-${{ hashFiles('upstream/global.json', 'upstream/**/*.csproj', 'upstream/Directory.Packages.props') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
 
-      - name: 'Cache: compiled Ryujinx core'
+      - name: Cache compiled iOS Ryujinx core
         id: core-cache
         uses: actions/cache@v4
         with:
-          path: src/Ryujinx.Library/bin
-          key: ryujinx-core-${{ hashFiles('src/**', '!src/MeloNX/**', 'global.json', 'Directory.Packages.props', 'nuget.config', 'distribution/ios/build.sh') }}
+          path: upstream/src/Ryujinx.Library/bin
+          key: ${{ runner.os }}-melonx-2.7-core-${{ hashFiles('upstream/src/**', '!upstream/src/MeloNX/**', 'upstream/global.json', 'upstream/Directory.Packages.props', 'upstream/nuget.config', 'upstream/distribution/ios/build.sh') }}
 
       - name: Mark core cache hit
-        # build.sh sees this marker and skips the ~20 min NativeAOT publish
         if: steps.core-cache.outputs.cache-hit == 'true'
         run: touch .ci-core-cache-hit
+        working-directory: upstream
 
-      - name: Archive (unsigned)
+      - name: Archive unsigned iOS app
+        working-directory: upstream
+        shell: bash
         run: |
+          mkdir -p build
           xcodebuild archive \
             -project src/MeloNX/MeloNX.xcodeproj \
             -scheme MeloNX \
@@ -67,20 +87,34 @@ jobs:
             DEVELOPMENT_TEAM="" \
             SWIFT_OPTIMIZATION_LEVEL=-Onone
 
-      - name: Package IPA
+      - name: Package IPA and build metadata
+        working-directory: upstream
+        shell: bash
         run: |
+          APP_PATH="build/MeloNX.xcarchive/Products/Applications/MeloNX.app"
+          test -d "$APP_PATH"
           mkdir -p build/Payload
-          cp -R build/MeloNX.xcarchive/Products/Applications/MeloNX.app build/Payload/
-          cd build
-          zip -qry MeloNX-unsigned.ipa Payload
+          cp -R "$APP_PATH" build/Payload/
+          (
+            cd build
+            zip -qry MeloNX-2.7-unsigned.ipa Payload
+          )
+          shasum -a 256 build/MeloNX-2.7-unsigned.ipa > build/MeloNX-2.7-unsigned.ipa.sha256
+          {
+            echo "Version: MeloNX 2.7"
+            echo "Source: https://starforgejo.dev/projects/MeloNX"
+            echo "Tag: 2.7"
+            echo "Commit: $(git rev-parse HEAD)"
+            echo "Build: unsigned iOS archive"
+          } > build/source-info.txt
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
         with:
-          name: MeloNX-unsigned-ipa
-          path: build/MeloNX-unsigned.ipa
-
-      - name: Update v2.5 release asset
-        if: github.ref_name == 'master'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload v2.5 build/MeloNX-unsigned.ipa --clobber -R "$GITHUB_REPOSITORY"
+          name: MeloNX-2.7-unsigned-IPA
+          path: |
+            upstream/build/MeloNX-2.7-unsigned.ipa
+            upstream/build/MeloNX-2.7-unsigned.ipa.sha256
+            upstream/build/source-info.txt
+          if-no-files-found: error
+          retention-days: 14
