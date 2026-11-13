@@ -1,6 +1,10 @@
 name: Build MeloNX 2.7 IPA (unsigned)
 
 on:
+  push:
+    branches: [ master ]
+    paths:
+      - ".github/workflows/build-ipa.yml"
   workflow_dispatch:
 
 permissions:
@@ -12,7 +16,6 @@ concurrency:
 
 jobs:
   build-ipa:
-    # MeloNX's iOS project targets the iOS 26 SDK.
     runs-on: macos-26
     timeout-minutes: 120
 
@@ -31,13 +34,25 @@ jobs:
           test -f upstream/global.json
           test -f upstream/distribution/ios/build.sh
           test -f upstream/src/MeloNX/MeloNX.xcodeproj/project.pbxproj
-          echo "UPSTREAM_COMMIT=$(git -C upstream rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "Fetched official MeloNX source at $(git -C upstream rev-parse --short HEAD)"
+
+          UPSTREAM_COMMIT="$(git -C upstream rev-parse HEAD)"
+          echo "Official MeloNX 2.7 commit: $UPSTREAM_COMMIT"
+          case "$UPSTREAM_COMMIT" in
+            13700519f3*) ;;
+            *)
+              echo "::error::Tag 2.7 resolved to an unexpected commit: $UPSTREAM_COMMIT"
+              exit 1
+              ;;
+          esac
+          echo "UPSTREAM_COMMIT=$UPSTREAM_COMMIT" >> "$GITHUB_ENV"
 
       - name: Set up .NET SDK
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: upstream/global.json
+
+      - name: Install .NET iOS workload
+        run: dotnet workload install ios
 
       - name: Make dotnet visible to Xcode's build script
         run: sudo ln -sf "$(command -v dotnet)" /usr/local/bin/dotnet
@@ -49,14 +64,16 @@ jobs:
           sudo xcode-select -s "$XCODE_PATH"
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
+          dotnet --info
+          dotnet workload list
 
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('upstream/global.json', 'upstream/**/*.csproj', 'upstream/Directory.Packages.props') }}
+          key: ${{ runner.os }}-nuget-melonx-2.7-${{ hashFiles('upstream/global.json', 'upstream/**/*.csproj', 'upstream/Directory.Packages.props') }}
           restore-keys: |
-            ${{ runner.os }}-nuget-
+            ${{ runner.os }}-nuget-melonx-
 
       - name: Cache compiled iOS Ryujinx core
         id: core-cache
@@ -104,7 +121,7 @@ jobs:
             echo "Version: MeloNX 2.7"
             echo "Source: https://starforgejo.dev/projects/MeloNX"
             echo "Tag: 2.7"
-            echo "Commit: $(git rev-parse HEAD)"
+            echo "Commit: $UPSTREAM_COMMIT"
             echo "Build: unsigned iOS archive"
           } > build/source-info.txt
 
