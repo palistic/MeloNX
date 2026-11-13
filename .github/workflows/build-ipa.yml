@@ -80,10 +80,7 @@ jobs:
       - name: Preflight restore of the iOS emulator core
         working-directory: upstream
         run: |
-          dotnet restore src/Ryujinx.Library/Ryujinx.Library.csproj \\
-            --runtime ios-arm64 \\
-            --configfile nuget.config \\
-            --verbosity normal
+          dotnet restore src/Ryujinx.Library/Ryujinx.Library.csproj --runtime ios-arm64 --configfile nuget.config --verbosity normal
 
       - name: Install .NET iOS workload
         run: dotnet workload install ios
