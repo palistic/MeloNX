@@ -51,6 +51,40 @@ jobs:
         with:
           global-json-file: upstream/global.json
 
+      - name: Redirect retired LibHac package feed
+        working-directory: upstream
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          config = Path("nuget.config")
+          tree = ET.parse(config)
+          root = tree.getroot()
+          replacement = "https://nuget.ryulynx.org/v3/index.json"
+          found = False
+
+          for source in root.findall("./packageSources/add"):
+              if source.get("key") == "LibHacAlpha":
+                  source.set("value", replacement)
+                  found = True
+
+          if not found:
+              raise SystemExit("LibHacAlpha source was not found in upstream/nuget.config")
+
+          tree.write(config, encoding="utf-8", xml_declaration=True)
+          print(f"LibHacAlpha now uses {replacement} (community package mirror)")
+          PY
+
+      - name: Preflight restore of the iOS emulator core
+        working-directory: upstream
+        run: |
+          dotnet restore src/Ryujinx.Library/Ryujinx.Library.csproj \\
+            --runtime ios-arm64 \\
+            --configfile nuget.config \\
+            --verbosity normal
+
       - name: Install .NET iOS workload
         run: dotnet workload install ios
 
